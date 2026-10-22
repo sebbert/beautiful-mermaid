@@ -800,3 +800,113 @@ describe('sequence layout – label fitting', () => {
     expect(left + right).toBeGreaterThan(longLabel.length * 5)
   })
 })
+
+describe('sequence layout – block contents', () => {
+  const longLabel = 'POST /api/widgets/batch?includeArchived=true&pageSize=250'
+
+  function right(b: { x: number; width: number }) {
+    return b.x + b.width
+  }
+
+  it('widens a block to hold a self-message label', () => {
+    const result = layout(`sequenceDiagram
+      participant A
+      participant B
+      loop Poll
+        B->>B: ${longLabel}
+      end`)
+    const msg = result.messages[0]!
+    const labelRight =
+      msg.x1 + 38 + estimateTextWidth(longLabel, FONT_SIZES.edgeLabel, FONT_WEIGHTS.edgeLabel)
+    expect(right(result.blocks[0]!)).toBeGreaterThan(labelRight)
+  })
+
+  it('widens a block to hold its header tab', () => {
+    const result = layout(`sequenceDiagram
+      participant A
+      participant B
+      opt ${longLabel}
+        B->>B: x
+      end`)
+    const block = result.blocks[0]!
+    const tabW = estimateTextWidth(`opt [${longLabel}]`, FONT_SIZES.edgeLabel, FONT_WEIGHTS.groupHeader) + 16
+    expect(block.width).toBeGreaterThan(tabW)
+    expect(result.width).toBeGreaterThanOrEqual(right(block))
+  })
+
+  it('widens a block and the gap after its first actor to hold divider labels', () => {
+    const result = layout(`sequenceDiagram
+      alt ok
+        A->>B: Save
+      else ${longLabel}
+        B-->>A: 409
+      end`)
+    const block = result.blocks[0]!
+    const divRight =
+      block.x + 8 + estimateTextWidth(`[${longLabel}]`, FONT_SIZES.edgeLabel, FONT_WEIGHTS.edgeLabel)
+    expect(right(block)).toBeGreaterThan(divRight)
+    expect(result.lifelines[1]!.x).toBeGreaterThan(divRight)
+  })
+
+  it('encloses notes written inside the block', () => {
+    const result = layout(`sequenceDiagram
+      loop Every minute
+        A->>B: Poll
+        Note right of B: Backs off exponentially after failures
+      end`)
+    const block = result.blocks[0]!
+    const note = result.notes[0]!
+    expect(block.x).toBeLessThan(note.x)
+    expect(right(block)).toBeGreaterThan(right(note))
+    expect(block.y + block.height).toBeGreaterThan(note.y + note.height)
+  })
+
+  it('leaves out notes written after the block', () => {
+    const result = layout(`sequenceDiagram
+      loop Every minute
+        A->>B: Poll
+      end
+      Note right of B: Backs off exponentially after failures`)
+    expect(right(result.blocks[0]!)).toBeLessThan(right(result.notes[0]!))
+  })
+
+  it('nests blocks inside each other with stacked header tabs', () => {
+    const result = layout(`sequenceDiagram
+      A->>B: Before
+      loop Retry
+        alt success
+          A->>B: Request
+        else failure
+          B-->>A: Error
+        end
+      end
+      A->>B: After`)
+    const [inner, outer] = result.blocks as [PositionedBlockLike, PositionedBlockLike]
+    expect(inner.type).toBe('alt')
+    expect(outer.x).toBeLessThan(inner.x)
+    expect(right(outer)).toBeGreaterThan(right(inner))
+    // The outer tab (18px tall) ends above the inner block's top edge
+    expect(outer.y + 18).toBeLessThan(inner.y)
+    expect(outer.y + outer.height).toBeGreaterThan(inner.y + inner.height)
+    // The next message's label stays below the outer block
+    expect(result.messages[3]!.y - 16).toBeGreaterThan(outer.y + outer.height)
+  })
+
+  it('puts a divider above the header of a block opening right after it', () => {
+    const result = layout(`sequenceDiagram
+      alt ok
+        A->>B: Save
+      else retry
+        loop Backoff
+          A->>B: Save again
+        end
+      end`)
+    const [inner, outer] = result.blocks as [PositionedBlockLike, PositionedBlockLike]
+    const divider = outer.dividers[0]!
+    expect(divider.y).toBeGreaterThan(result.messages[0]!.y)
+    // The divider label (centred 14px below the divider) clears the inner block
+    expect(divider.y + 20).toBeLessThan(inner.y)
+  })
+})
+
+type PositionedBlockLike = ReturnType<typeof layout>['blocks'][number]
