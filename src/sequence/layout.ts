@@ -48,6 +48,73 @@ const SEQ = {
   noteGap: 10,
 } as const
 
+/** Space kept between a label and the next lifeline */
+const LABEL_CLEARANCE = 16
+
+/**
+ * Widen the gaps between actors so labels do not cross a lifeline: message labels
+ * (centred between their endpoints), self-message labels (to the right of the loop),
+ * notes beside an actor, and block header tabs. `gaps[i]` is the distance between
+ * actor i - 1 and actor i, and is widened in place.
+ */
+function fitLabelsBetweenLifelines(
+  diagram: SequenceDiagram,
+  actorWidths: number[],
+  gaps: number[]
+): void {
+  const index = new Map(diagram.actors.map((a, i) => [a.id, i]))
+  const labelWidth = (text: string, size: number, weight: number) =>
+    Math.max(0, ...text.split('\n').map(line => estimateTextWidth(line, size, weight)))
+
+  // Spread any shortfall evenly over the gaps between actors `from` and `to`
+  const widen = (from: number, to: number, need: number) => {
+    if (from < 0 || to <= from || to >= gaps.length) return
+    let have = 0
+    for (let g = from + 1; g <= to; g++) have += gaps[g]!
+    if (have >= need) return
+    const add = (need - have) / (to - from)
+    for (let g = from + 1; g <= to; g++) gaps[g]! += add
+  }
+
+  for (const m of diagram.messages) {
+    const a = index.get(m.from)
+    const b = index.get(m.to)
+    if (a === undefined || b === undefined || !m.label) continue
+    const w = labelWidth(m.label, FONT_SIZES.edgeLabel, FONT_WEIGHTS.edgeLabel)
+    // Self-message: the loop is 30 wide and its label starts 8 past it
+    if (a === b) widen(a, a + 1, 38 + w + LABEL_CLEARANCE)
+    else widen(Math.min(a, b), Math.max(a, b), w + 2 * LABEL_CLEARANCE)
+  }
+
+  for (const n of diagram.notes) {
+    const i = index.get(n.actorIds[0] ?? '')
+    if (i === undefined) continue
+    const w = Math.max(
+      SEQ.noteWidth,
+      labelWidth(n.text, FONT_SIZES.edgeLabel, FONT_WEIGHTS.edgeLabel) + SEQ.notePadX * 2
+    )
+    const reach = actorWidths[i]! / 2 + SEQ.noteGap + w + LABEL_CLEARANCE
+    if (n.position === 'right') widen(i, i + 1, reach)
+    else if (n.position === 'left') widen(i - 1, i, reach)
+    else if (n.actorIds.length <= 1) {
+      widen(i, i + 1, w / 2 + LABEL_CLEARANCE)
+      widen(i - 1, i, w / 2 + LABEL_CLEARANCE)
+    }
+  }
+
+  for (const block of diagram.blocks) {
+    let first = diagram.actors.length
+    for (let mi = block.startIndex; mi <= block.endIndex; mi++) {
+      const m = diagram.messages[mi]
+      if (m) first = Math.min(first, index.get(m.from) ?? 0, index.get(m.to) ?? 0)
+    }
+    if (first === diagram.actors.length) first = 0
+    const tab = `${block.type}${block.label ? ` [${block.label}]` : ''}`.split('\n')[0]!
+    const tabW = labelWidth(tab, FONT_SIZES.edgeLabel, FONT_WEIGHTS.groupHeader) + 16
+    widen(first, first + 1, actorWidths[first]! / 2 + SEQ.blockPadX + tabW + LABEL_CLEARANCE)
+  }
+}
+
 /**
  * Lay out a parsed sequence diagram.
  * Returns a fully positioned diagram ready for SVG rendering.
@@ -66,14 +133,16 @@ export function layoutSequenceDiagram(
     return Math.max(textW + SEQ.actorPadX * 2, 80)
   })
 
-  // Build actor center X positions with minimum gap
+  // Build actor center X positions with minimum gap, widened to fit labels between lifelines
+  const gaps = actorWidths.map((w, i) =>
+    i === 0 ? 0 : Math.max(SEQ.actorGap, (actorWidths[i - 1]! + w) / 2 + 40)
+  )
+  fitLabelsBetweenLifelines(diagram, actorWidths, gaps)
+
   const actorCenterX: number[] = []
   let currentX = SEQ.padding + actorWidths[0]! / 2
   for (let i = 0; i < diagram.actors.length; i++) {
-    if (i > 0) {
-      const minGap = Math.max(SEQ.actorGap, (actorWidths[i - 1]! + actorWidths[i]!) / 2 + 40)
-      currentX += minGap
-    }
+    currentX += gaps[i]!
     actorCenterX.push(currentX)
   }
 

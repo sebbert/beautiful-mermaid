@@ -42,14 +42,14 @@ export function renderSequenceSvg(
   parts.push(arrowMarkerDefs())
   parts.push('</defs>')
 
-  // 1. Block backgrounds (loop/alt/opt rectangles)
-  for (const block of diagram.blocks) {
-    parts.push(renderBlock(block))
-  }
-
-  // 2. Lifelines (dashed vertical lines from actor to bottom)
+  // 1. Lifelines (dashed vertical lines from actor to bottom)
   for (const lifeline of diagram.lifelines) {
     parts.push(renderLifeline(lifeline))
+  }
+
+  // 2. Block backgrounds (loop/alt/opt rectangles), drawn over the lifelines so header tabs stay legible
+  for (const block of diagram.blocks) {
+    parts.push(renderBlock(block))
   }
 
   // 3. Activation boxes

@@ -8,6 +8,7 @@
 import { describe, it, expect } from 'bun:test'
 import { parseSequenceDiagram } from '../sequence/parser.ts'
 import { layoutSequenceDiagram } from '../sequence/layout.ts'
+import { estimateTextWidth, FONT_SIZES, FONT_WEIGHTS } from '../styles.ts'
 
 /** Helper: parse and layout a sequence diagram from source lines */
 function layout(source: string) {
@@ -436,14 +437,18 @@ describe('sequence layout – render clearance', () => {
     const divider = block.dividers[0]!
     const msgAfter = result.messages[2]! // "403 Forbidden"
 
-    // With the overlap-aware offset (36 instead of default 28), the divider
-    // label baseline (divider.y + 14) should be further from the message
-    // label baseline (msg.y - 6), giving at least 14px baseline clearance.
-    const divLabelBaseline = divider.y + 14
-    const msgLabelBaseline = msgAfter.y - 6
-    const baselineClearance = msgLabelBaseline - divLabelBaseline
+    // The labels must not collide: either the actor gap is wide enough that they
+    // do not overlap horizontally, or the overlap-aware offset (36 instead of the
+    // default 28) leaves at least 14px between the divider label baseline
+    // (divider.y + 14) and the message label baseline (msg.y - 6).
+    const divLabelRight =
+      block.x + 8 + estimateTextWidth(`[${divider.label}]`, FONT_SIZES.edgeLabel, FONT_WEIGHTS.edgeLabel)
+    const msgLabelLeft =
+      (msgAfter.x1 + msgAfter.x2) / 2 -
+      estimateTextWidth(msgAfter.label, FONT_SIZES.edgeLabel, FONT_WEIGHTS.edgeLabel) / 2
+    const baselineClearance = msgAfter.y - 6 - (divider.y + 14)
 
-    expect(baselineClearance).toBeGreaterThanOrEqual(14)
+    expect(divLabelRight <= msgLabelLeft || baselineClearance >= 14).toBe(true)
   })
 
   it('short divider labels keep the default offset (no unnecessary extra space)', () => {
@@ -743,5 +748,55 @@ describe('sequence layout – note positioning', () => {
       expect(note.y).toBeGreaterThanOrEqual(0)
       expect(note.y + note.height).toBeLessThanOrEqual(result.height)
     }
+  })
+})
+
+describe('sequence layout – label fitting', () => {
+  const longLabel = 'POST /api/widgets/batch?includeArchived=true&pageSize=250'
+
+  function lifelineGap(result: ReturnType<typeof layout>) {
+    return result.lifelines[1]!.x - result.lifelines[0]!.x
+  }
+
+  it('keeps the default gap when labels are short', () => {
+    const result = layout(`sequenceDiagram
+      A->>B: Hi`)
+    expect(lifelineGap(result)).toBe(140)
+  })
+
+  it('widens the gap so a long message label fits between lifelines', () => {
+    const result = layout(`sequenceDiagram
+      A->>B: ${longLabel}`)
+    expect(lifelineGap(result)).toBeGreaterThan(longLabel.length * 5)
+  })
+
+  it('widens the gap so a self-message label stops before the next lifeline', () => {
+    const result = layout(`sequenceDiagram
+      participant A
+      participant B
+      A->>A: ${longLabel}`)
+    expect(lifelineGap(result)).toBeGreaterThan(38 + longLabel.length * 5)
+  })
+
+  it('widens the gap so a block header tab fits', () => {
+    const short = layout(`sequenceDiagram
+      A->>B: x`)
+    const withBlock = layout(`sequenceDiagram
+      loop Until every worker has drained its queue and reported back
+        A->>B: x
+      end`)
+    expect(lifelineGap(withBlock)).toBeGreaterThan(lifelineGap(short))
+  })
+
+  it('spreads a label spanning several actors over the gaps it crosses', () => {
+    const result = layout(`sequenceDiagram
+      participant A
+      participant B
+      participant C
+      A->>C: ${longLabel}`)
+    const left = result.lifelines[1]!.x - result.lifelines[0]!.x
+    const right = result.lifelines[2]!.x - result.lifelines[1]!.x
+    expect(left).toBeCloseTo(right)
+    expect(left + right).toBeGreaterThan(longLabel.length * 5)
   })
 })
